@@ -15,6 +15,44 @@
     }
     
     /**
+     * Checks if this is a reasoning/thinking dropdown element
+     */
+    function isReasoningDropdown(element) {
+        // Look for the button with "Processo di ragionamento" text
+        const button = element.querySelector('button');
+        if (!button) return false;
+        
+        const textContent = button.textContent || '';
+        // Check for various language versions
+        return textContent.includes('Processo di ragionamento') || 
+               textContent.includes('Thinking') ||
+               textContent.includes('Reasoning') ||
+               textContent.includes('Processing');
+    }
+    
+    /**
+     * Extracts content from a reasoning dropdown
+     */
+    function extractReasoningContent(dropdownElement) {
+        // Find the content area (usually in a div with overflow settings)
+        const contentArea = dropdownElement.querySelector('div[style*="overflow"]');
+        if (!contentArea) return '';
+        
+        // Extract the text content
+        const paragraphs = contentArea.querySelectorAll('p');
+        let content = '';
+        
+        paragraphs.forEach(p => {
+            const text = p.textContent?.trim();
+            if (text) {
+                content += text + '\n\n';
+            }
+        });
+        
+        return content.trim();
+    }
+    
+    /**
      * Detects programming language from code block context
      */
     function detectCodeLanguage(codeElement) {
@@ -199,6 +237,15 @@
      */
     function extractMessageContent(messageContainer, isUserMessage) {
         let contentDiv;
+        let reasoningContent = null;
+        
+        // First, check if this message contains a reasoning dropdown
+        const dropdowns = messageContainer.querySelectorAll('div.transition-all.duration-400');
+        dropdowns.forEach(dropdown => {
+            if (isReasoningDropdown(dropdown)) {
+                reasoningContent = extractReasoningContent(dropdown);
+            }
+        });
         
         if (isUserMessage) {
             // For user messages, look for div with class "flex flex-row gap-2"
@@ -248,7 +295,14 @@
         }
         
         // Clean up excessive newlines
-        return content.replace(/\n{3,}/g, '\n\n');
+        content = content.replace(/\n{3,}/g, '\n\n');
+        
+        // Add reasoning content if found
+        if (reasoningContent) {
+            content = `\n\n<!-- INIZIO PROCESSO DI RAGIONAMENTO -->\n***[Processo di ragionamento]***\n\n${reasoningContent}\n<!-- FINE PROCESSO DI RAGIONAMENTO -->\n\n${content}`;
+        }
+        
+        return content;
     }
     
     /**
@@ -304,7 +358,7 @@
             return position & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
         });
         
-        // Generate markdown
+        // Generate markdown with clear separation
         const markdown = messages.map(msg => {
             const prefix = msg.type === 'user' ? '**User:**' : '**Claude:**';
             return `${prefix} ${msg.content}`;
@@ -347,7 +401,7 @@
         downloadMarkdown(markdown);
         
         console.log('🎉 Export complete!');
-        alert('✅ Conversation exported successfully!');
+        alert('✅ Conversation exported successfully! Reasoning sections are clearly marked.');
     }
     
     // Execute the main function
