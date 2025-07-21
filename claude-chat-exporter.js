@@ -27,7 +27,6 @@ javascript:(function() {
      * Extracts user initials from the page
      */
     function getUserInitials() {
-        // Look for user initials in profile avatar
         const avatarElements = document.querySelectorAll('div[class*="rounded-full"][class*="font-bold"]');
         for (const avatar of avatarElements) {
             const text = avatar.textContent?.trim();
@@ -35,16 +34,6 @@ javascript:(function() {
                 return text;
             }
         }
-        
-        // Fallback: try to find initials in any element with 1-3 capital letters
-        const allElements = document.querySelectorAll('*');
-        for (const el of allElements) {
-            const text = el.textContent?.trim();
-            if (text && text.match(/^[A-Z]{1,3}$/) && el.children.length === 0) {
-                return text;
-            }
-        }
-        
         return null;
     }
     
@@ -52,13 +41,11 @@ javascript:(function() {
      * Gets the chat title from the page
      */
     function getChatTitle() {
-        // Look for the chat title in the header
         const titleSelectors = [
             'button[data-testid="chat-menu-trigger"] div.truncate',
             'header div.truncate',
             'div.truncate.tracking-tight',
-            'button div.truncate',
-            '[class*="truncate"]'
+            'button div.truncate'
         ];
         
         for (const selector of titleSelectors) {
@@ -75,28 +62,19 @@ javascript:(function() {
     }
     
     /**
-     * Cleans user message content by removing profile initials and UI elements
+     * Cleans user message content
      */
     function cleanUserMessage(content, userInitials = null) {
         if (!content) return '';
         
-        // Remove user initials if found
         if (userInitials) {
             const initialsRegex = new RegExp(`^${userInitials}\\s*`, 'g');
             content = content.replace(initialsRegex, '');
         }
         
-        // Remove any 1-3 capital letters at the start (fallback)
         content = content.replace(/^[A-Z]{1,3}\s+/, '');
-        
-        // Remove common UI elements
-        content = content.replace(/^(User:|Claude:)\s*/i, '');
         content = content.replace(/\b(Share|Copy|Edit|Delete|Modifica|Condividi|Copia|Modifica|Elimina)\b/g, '');
-        
-        // Remove navigation elements like "2/2"
         content = content.replace(/\d+\/\d+/g, '');
-        
-        // Clean up whitespace
         content = content.replace(/\s+/g, ' ').trim();
         
         return content;
@@ -106,38 +84,26 @@ javascript:(function() {
      * Extracts user message content
      */
     function extractUserContent(messageContainer, userInitials = null) {
-        // Try to find the main content area
+        let bestContent = '';
+        
+        // First try specific selectors
         const contentSelectors = [
             '[data-testid="user-message"]',
             'div.font-user-message',
-            'div.flex.flex-row.gap-2',
-            '[class*="message"]',
-            'div > div:last-child',
-            'p'
+            '.prose'
         ];
         
-        let bestContent = '';
-        let maxLength = 0;
-        
         for (const selector of contentSelectors) {
-            const elements = messageContainer.querySelectorAll(selector);
-            elements.forEach(element => {
-                // Skip avatar elements
-                if (element.classList.contains('rounded-full') || 
-                    element.classList.contains('shrink-0') ||
-                    (element.textContent?.trim().match(/^[A-Z]{1,3}$/) && element.children.length === 0)) {
-                    return;
-                }
-                
+            const element = messageContainer.querySelector(selector);
+            if (element) {
                 const text = element.textContent?.trim() || '';
-                if (text.length > 3 && text.length > maxLength) {
-                    maxLength = text.length;
+                if (text.length > bestContent.length) {
                     bestContent = text;
                 }
-            });
+            }
         }
         
-        // Fallback to container text if no better content found
+        // Fallback to full container text
         if (!bestContent || bestContent.length < 10) {
             bestContent = messageContainer.textContent?.trim() || '';
         }
@@ -146,7 +112,7 @@ javascript:(function() {
     }
     
     /**
-     * Extracts reasoning content from dropdown
+     * Extracts reasoning content
      */
     function extractReasoningContent(reasoningDropdown) {
         if (!reasoningDropdown) return null;
@@ -205,79 +171,188 @@ javascript:(function() {
     }
     
     /**
-     * Extracts Claude response content (excluding reasoning)
+     * Recursively extracts text and math from elements
+     */
+    function extractContentRecursive(element, reasoningDropdown = null, result = { parts: [] }) {
+        // Skip if in reasoning dropdown
+        if (reasoningDropdown && reasoningDropdown.contains(element)) {
+            return result;
+        }
+        
+        // Check if this is a math element
+        if (element.classList && (element.classList.contains('katex') || 
+            Array.from(element.classList).some(c => c.includes('math')))) {
+            
+            // Extract LaTeX
+            let latex = element.getAttribute('data-latex') || 
+                       element.querySelector('.katex-mathml annotation')?.textContent ||
+                       element.textContent;
+                       
+            if (latex) {
+                const isDisplay = element.classList.contains('katex-display') || 
+                                element.parentElement?.classList.contains('katex-display');
+                                
+                result.parts.push({
+                    type: 'math',
+                    content: latex,
+                    display: isDisplay
+                });
+            }
+            return result;
+        }
+        
+        // Process child nodes
+        for (const child of element.childNodes) {
+            if (child.nodeType === Node.TEXT_NODE) {
+                const text = child.textContent;
+                if (text && text.trim()) {
+                    // Add text or append to last text part
+                    const lastPart = result.parts[result.parts.length - 1];
+                    if (lastPart && lastPart.type === 'text') {
+                        lastPart.content += text;
+                    } else {
+                        result.parts.push({
+                            type: 'text',
+                            content: text
+                        });
+                    }
+                }
+            } else if (child.nodeType === Node.ELEMENT_NODE) {
+                // Handle specific tags
+                const tag = child.tagName.toLowerCase();
+                
+                if (tag === 'br') {
+                    result.parts.push({ type: 'break' });
+                } else if (tag === 'p' || tag === 'div') {
+                    // Add paragraph break before if needed
+                    const lastPart = result.parts[result.parts.length - 1];
+                    if (lastPart && lastPart.type !== 'break' && lastPart.type !== 'paragraph') {
+                        result.parts.push({ type: 'paragraph' });
+                    }
+                    
+                    // Recursively process paragraph
+                    extractContentRecursive(child, reasoningDropdown, result);
+                    
+                    // Add paragraph break after
+                    result.parts.push({ type: 'paragraph' });
+                } else if (tag === 'code' && child.parentElement.tagName !== 'PRE') {
+                    result.parts.push({
+                        type: 'code',
+                        content: child.textContent
+                    });
+                } else if (tag === 'pre') {
+                    const codeEl = child.querySelector('code');
+                    result.parts.push({
+                        type: 'codeblock',
+                        content: codeEl ? codeEl.textContent : child.textContent,
+                        language: codeEl?.className?.match(/language-(\w+)/)?.[1] || ''
+                    });
+                } else if (tag === 'strong' || tag === 'b') {
+                    result.parts.push({
+                        type: 'bold',
+                        content: child.textContent
+                    });
+                } else if (tag === 'em' || tag === 'i') {
+                    result.parts.push({
+                        type: 'italic',
+                        content: child.textContent
+                    });
+                } else if (tag.match(/^h[1-6]$/)) {
+                    result.parts.push({
+                        type: 'heading',
+                        level: parseInt(tag[1]),
+                        content: child.textContent
+                    });
+                } else {
+                    // Recursively process other elements
+                    extractContentRecursive(child, reasoningDropdown, result);
+                }
+            }
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Converts content parts to markdown
+     */
+    function partsToMarkdown(parts) {
+        let markdown = '';
+        
+        for (let i = 0; i < parts.length; i++) {
+            const part = parts[i];
+            
+            switch (part.type) {
+                case 'text':
+                    markdown += part.content;
+                    break;
+                case 'math':
+                    if (part.display) {
+                        markdown += `\n\n$$${part.content}$$\n\n`;
+                    } else {
+                        markdown += `$${part.content}$`;
+                    }
+                    break;
+                case 'paragraph':
+                    // Add double newline, but avoid multiple consecutive breaks
+                    if (!markdown.endsWith('\n\n')) {
+                        markdown += '\n\n';
+                    }
+                    break;
+                case 'break':
+                    markdown += '\n';
+                    break;
+                case 'code':
+                    markdown += `\`${part.content}\``;
+                    break;
+                case 'codeblock':
+                    markdown += `\n\`\`\`${part.language}\n${part.content}\n\`\`\`\n`;
+                    break;
+                case 'bold':
+                    markdown += `**${part.content}**`;
+                    break;
+                case 'italic':
+                    markdown += `*${part.content}*`;
+                    break;
+                case 'heading':
+                    markdown += `\n${'#'.repeat(part.level)} ${part.content}\n\n`;
+                    break;
+            }
+        }
+        
+        // Clean up excessive newlines
+        markdown = markdown.replace(/\n{3,}/g, '\n\n').trim();
+        
+        return markdown;
+    }
+    
+    /**
+     * Extracts Claude response content
      */
     function extractClaudeResponse(messageContainer, reasoningDropdown) {
-        let response = '';
-        const processed = new Set();
+        console.log('Extracting Claude response...');
         
-        // Look for the main response area with Claude styling
+        // Find the main content area
         const responseArea = messageContainer.querySelector('div.font-claude-message') ||
                             messageContainer.querySelector('[class*="prose"]') ||
                             messageContainer;
         
-        // Process all content elements
-        const contentElements = responseArea.querySelectorAll('p, h1, h2, h3, h4, h5, h6, pre, code, ul, ol, blockquote, table');
+        if (!responseArea) {
+            console.warn('No response area found');
+            return '';
+        }
         
-        contentElements.forEach(el => {
-            // Skip if inside reasoning dropdown
-            if (reasoningDropdown && reasoningDropdown.contains(el)) return;
-            
-            const text = el.textContent.trim();
-            if (!text || processed.has(text)) return;
-            processed.add(text);
-            
-            // Process different element types
-            switch(el.tagName) {
-                case 'P':
-                    if (text) response += text + '\n\n';
-                    break;
-                    
-                case 'H1': case 'H2': case 'H3': case 'H4': case 'H5': case 'H6':
-                    const level = parseInt(el.tagName[1]);
-                    response += '#'.repeat(level) + ' ' + text + '\n\n';
-                    break;
-                    
-                case 'PRE':
-                    // Handle code blocks
-                    const codeEl = el.querySelector('code');
-                    const code = codeEl ? codeEl.textContent : text;
-                    response += '```\n' + code + '\n```\n\n';
-                    break;
-                    
-                case 'CODE':
-                    if (el.parentElement.tagName !== 'PRE') {
-                        response += '`' + text + '`';
-                    }
-                    break;
-                    
-                case 'LI':
-                    const list = el.parentElement;
-                    if (list.tagName === 'OL') {
-                        const index = Array.from(list.children).indexOf(el) + 1;
-                        response += `${index}. ${text}\n`;
-                    } else {
-                        response += `- ${text}\n`;
-                    }
-                    if (el.nextElementSibling === null) response += '\n';
-                    break;
-                    
-                case 'BLOCKQUOTE':
-                    response += '> ' + text.replace(/\n/g, '\n> ') + '\n\n';
-                    break;
-            }
-        });
+        // Extract content recursively
+        const { parts } = extractContentRecursive(responseArea, reasoningDropdown);
         
-        // Handle math expressions
-        responseArea.querySelectorAll('.katex, [class*="math"]').forEach(math => {
-            if (reasoningDropdown && reasoningDropdown.contains(math)) return;
-            const latex = math.getAttribute('data-latex') || math.textContent;
-            if (latex && !response.includes(latex)) {
-                response += `$${latex}$\n\n`;
-            }
-        });
+        console.log(`Extracted ${parts.length} content parts`);
         
-        return response.trim();
+        // Convert to markdown
+        const markdown = partsToMarkdown(parts);
+        
+        console.log('Generated markdown:', markdown.substring(0, 200) + '...');
+        
+        return markdown;
     }
     
     /**
@@ -299,28 +374,30 @@ javascript:(function() {
             
             // Check for user message
             if (hasAllClasses(div, ['group', 'relative', 'inline-flex', 'bg-bg-300']) ||
-                hasAllClasses(div, ['group', 'relative', 'inline-flex']) && div.classList.contains('bg-bg-300')) {
+                (hasAllClasses(div, ['group', 'relative', 'inline-flex']) && div.classList.contains('bg-bg-300'))) {
                 const content = extractUserContent(div, userInitials);
-                if (content && content.length > 5) { // Reduced threshold after cleaning
+                if (content && content.length > 5) {
                     messageData = {
                         type: 'user',
                         content: content,
                         element: div,
                         contentHash: hashString(content)
                     };
-                    console.log('👤 Found user message');
+                    console.log('👤 Found user message:', content.substring(0, 50) + '...');
                 }
             }
             // Check for Claude message
             else if (hasAllClasses(div, ['group', 'relative', '-tracking-[0.015em]']) ||
-                     hasAllClasses(div, ['group', 'relative']) && div.classList.contains('-tracking-[0.015em]')) {
+                     (hasAllClasses(div, ['group', 'relative']) && div.classList.contains('-tracking-[0.015em]'))) {
+                
                 // Look for reasoning dropdown
                 const reasoningDropdown = div.querySelector('[class*="rounded-lg"][class*="border"]');
-                const hasReasoningContent = reasoningDropdown && reasoningDropdown.querySelector('[class*="overflow-y-auto"]');
+                const hasReasoningContent = reasoningDropdown && reasoningDropdown.querySelector('[class*="overflow"]');
                 
                 let reasoning = null;
                 if (hasReasoningContent) {
                     reasoning = extractReasoningContent(reasoningDropdown);
+                    console.log('🧠 Found reasoning:', reasoning?.content.substring(0, 50) + '...');
                 }
                 
                 const response = extractClaudeResponse(div, reasoningDropdown);
@@ -352,7 +429,7 @@ javascript:(function() {
             return null;
         }
         
-        // Sort messages by DOM order to maintain conversation flow
+        // Sort messages by DOM order
         messages.sort((a, b) => {
             const position = a.element.compareDocumentPosition(b.element);
             return position & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
@@ -391,7 +468,7 @@ javascript:(function() {
                 }
             }
             
-            // Add separator between messages (except for the last one)
+            // Add separator between messages
             if (index < messages.length - 1) {
                 markdown += '---\n\n';
             }
@@ -409,7 +486,6 @@ javascript:(function() {
         const a = document.createElement('a');
         a.href = url;
         
-        // Create filename from chat title
         const safeTitle = chatTitle
             .replace(/[^a-zA-Z0-9\s\-_]/g, '')
             .replace(/\s+/g, '-')
@@ -439,6 +515,9 @@ javascript:(function() {
         
         const markdown = generateMarkdown(messages, chatTitle);
         console.log('📄 Generated markdown:', markdown.length, 'characters');
+        
+        // Also log a preview to console for debugging
+        console.log('📄 Markdown preview:\n', markdown.substring(0, 500) + '...');
         
         downloadMarkdown(markdown, chatTitle);
         
