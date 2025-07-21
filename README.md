@@ -93,11 +93,6 @@ Thank you, Claude! That was helpful.
 - A modern web browser (e.g., Chrome, Firefox, Safari).
 - Access to the Claude chat interface.
 
-## Limitations
-
-- The tool may not handle extremely long conversations or very large content blocks effectively due to browser limitations.
-- Some specialized content types or formatting might not be fully preserved in the export.
-
 ## Contributing
 
 If you'd like to contribute to this project, please feel free to submit a pull request or open an issue on the GitHub repository.
