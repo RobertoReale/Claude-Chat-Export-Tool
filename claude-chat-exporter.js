@@ -173,7 +173,7 @@ javascript:(function() {
     /**
      * Recursively extracts text and math from elements
      */
-    function extractContentRecursive(element, reasoningDropdown = null, result = { parts: [] }) {
+    function extractContentRecursive(element, reasoningDropdown = null, result = { parts: [] }, listDepth = 0) {
         // Skip if in reasoning dropdown
         if (reasoningDropdown && reasoningDropdown.contains(element)) {
             return result;
@@ -226,15 +226,38 @@ javascript:(function() {
                 } else if (tag === 'p' || tag === 'div') {
                     // Add paragraph break before if needed
                     const lastPart = result.parts[result.parts.length - 1];
-                    if (lastPart && lastPart.type !== 'break' && lastPart.type !== 'paragraph') {
+                    if (lastPart && lastPart.type !== 'paragraph') {
                         result.parts.push({ type: 'paragraph' });
                     }
                     
                     // Recursively process paragraph
-                    extractContentRecursive(child, reasoningDropdown, result);
+                    extractContentRecursive(child, reasoningDropdown, result, listDepth);
                     
                     // Add paragraph break after
                     result.parts.push({ type: 'paragraph' });
+                } else if (tag === 'ul' || tag === 'ol') {
+                    // Process list
+                    const isOrdered = tag === 'ol';
+                    const items = Array.from(child.children).filter(el => el.tagName.toLowerCase() === 'li');
+                    
+                    items.forEach((item, index) => {
+                        // Add list item marker
+                        result.parts.push({
+                            type: 'listitem',
+                            ordered: isOrdered,
+                            depth: listDepth,
+                            index: index + 1
+                        });
+                        
+                        // Recursively process list item content
+                        extractContentRecursive(item, reasoningDropdown, result, listDepth + 1);
+                        
+                        // Add newline after list item
+                        result.parts.push({ type: 'break' });
+                    });
+                } else if (tag === 'li') {
+                    // If we encounter a standalone li (not processed by parent ul/ol), process its content
+                    extractContentRecursive(child, reasoningDropdown, result, listDepth);
                 } else if (tag === 'code' && child.parentElement.tagName !== 'PRE') {
                     result.parts.push({
                         type: 'code',
@@ -265,7 +288,7 @@ javascript:(function() {
                     });
                 } else {
                     // Recursively process other elements
-                    extractContentRecursive(child, reasoningDropdown, result);
+                    extractContentRecursive(child, reasoningDropdown, result, listDepth);
                 }
             }
         }
@@ -293,6 +316,20 @@ javascript:(function() {
                         markdown += `$${part.content}$`;
                     }
                     break;
+                case 'listitem':
+                // ensure we start on a new line
+                if (!markdown.endsWith('\n')) {
+                    markdown += '\n';
+                }
+
+                // Add proper indentation
+                const indent = '  '.repeat(part.depth);
+                if (part.ordered) {
+                    markdown += `${indent}${part.index}. `;
+                } else {
+                    markdown += `${indent}- `;
+                }
+                break;
                 case 'paragraph':
                     // Add double newline, but avoid multiple consecutive breaks
                     if (!markdown.endsWith('\n\n')) {
@@ -300,7 +337,9 @@ javascript:(function() {
                     }
                     break;
                 case 'break':
-                    markdown += '\n';
+                    if (!markdown.endsWith('\n')) {
+                        markdown += '\n';
+                    }
                     break;
                 case 'code':
                     markdown += `\`${part.content}\``;
