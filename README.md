@@ -88,9 +88,6 @@ Thank you, Claude! That was helpful.
 
 ```
 
-## Known Bugs:
-The generated .md file also contains "[user_text]**Edit n/n**" or "[user_text]**Edit**" or "[user_text]**Modifica n/n**" or "[user_text]**Modifica**" instead of just the user's text when the Edit button was used in chat with Claude to edit a previously sent prompt.
-
 ## Requirements
 
 - A modern web browser (e.g., Chrome, Firefox, Safari).
