@@ -62,19 +62,35 @@ javascript:(function() {
     }
     
     /**
-     * Cleans user message content
+     * Cleans user message content - FIXED VERSION
      */
     function cleanUserMessage(content, userInitials = null) {
         if (!content) return '';
         
+        // Remove user initials if present
         if (userInitials) {
             const initialsRegex = new RegExp(`^${userInitials}\\s*`, 'g');
             content = content.replace(initialsRegex, '');
         }
         
+        // Remove initials pattern at the start
         content = content.replace(/^[A-Z]{1,3}\s+/, '');
-        content = content.replace(/\b(Share|Copy|Edit|Delete|Modifica|Condividi|Copia|Modifica|Elimina)\b/g, '');
-        content = content.replace(/\d+\/\d+/g, '');
+        
+        // FIXED: Remove Edit/Modifica patterns with various formats
+        // Handle cases like "textEdit2/2", "textEdit 2 / 2", "textModifica", etc.
+        content = content.replace(/(Edit|Modifica)\s*\d*\s*\/?\s*\d*/gi, '');
+        
+        // Remove other UI elements (Share, Copy, Delete, etc.)
+        // Using lookahead/lookbehind to ensure we're not in the middle of a word
+        content = content.replace(/(?<![a-zA-Z])(Share|Copy|Delete|Condividi|Copia|Elimina)(?![a-zA-Z])/gi, '');
+        
+        // Remove standalone number patterns like "2/2" that might remain
+        content = content.replace(/(?<![a-zA-Z0-9])\d+\s*\/\s*\d+(?![a-zA-Z0-9])/g, '');
+        
+        // Clean up any remaining UI noise at the end of the string
+        content = content.replace(/(Edit|Modifica)\s*$/gi, '');
+        
+        // Normalize whitespace
         content = content.replace(/\s+/g, ' ').trim();
         
         return content;
@@ -104,7 +120,7 @@ javascript:(function() {
         }
         
         // Fallback to full container text
-        if (!bestContent || bestContent.length < 10) {
+        if (!bestContent) {  // Removed length check
             bestContent = messageContainer.textContent?.trim() || '';
         }
         
@@ -415,7 +431,7 @@ javascript:(function() {
             if (hasAllClasses(div, ['group', 'relative', 'inline-flex', 'bg-bg-300']) ||
                 (hasAllClasses(div, ['group', 'relative', 'inline-flex']) && div.classList.contains('bg-bg-300'))) {
                 const content = extractUserContent(div, userInitials);
-                if (content && content.length > 5) {
+                if (content && content.length > 0) {  // Changed from > 5 to > 0
                     messageData = {
                         type: 'user',
                         content: content,
