@@ -187,7 +187,25 @@ javascript:(function() {
     }
     
     /**
-     * Recursively extracts text and math from elements
+     * Checks if an element contains KaTeX math
+     */
+    function containsKatex(element) {
+        return element.querySelector && element.querySelector('.katex') !== null;
+    }
+
+    /**
+     * Extracts LaTeX from a KaTeX element
+     */
+    function extractLatexFromKatex(katexElement) {
+        const annotation = katexElement.querySelector('annotation[encoding="application/x-tex"]');
+        if (annotation) {
+            return annotation.textContent.trim();
+        }
+        return null;
+    }
+
+    /**
+     * Recursively extracts text and math from elements - FIXED VERSION
      */
     function extractContentRecursive(element, reasoningDropdown = null, result = { parts: [] }, listDepth = 0) {
         // Skip if in reasoning dropdown
@@ -195,19 +213,13 @@ javascript:(function() {
             return result;
         }
         
-        // Check if this is a math element
-        if (element.classList && (element.classList.contains('katex') || 
-            Array.from(element.classList).some(c => c.includes('math')))) {
-            
-            // Extract LaTeX
-            let latex = element.getAttribute('data-latex') || 
-                       element.querySelector('.katex-mathml annotation')?.textContent ||
-                       element.textContent;
-                       
+        // Handle KaTeX elements directly
+        if (element.classList && element.classList.contains('katex')) {
+            const latex = extractLatexFromKatex(element);
             if (latex) {
                 const isDisplay = element.classList.contains('katex-display') || 
                                 element.parentElement?.classList.contains('katex-display');
-                                
+                
                 result.parts.push({
                     type: 'math',
                     content: latex,
@@ -217,15 +229,172 @@ javascript:(function() {
             return result;
         }
         
-        // Process child nodes
+        // Skip katex-html and katex-mathml spans to avoid duplication
+        if (element.classList && 
+            (element.classList.contains('katex-html') || 
+            element.classList.contains('katex-mathml'))) {
+            return result;
+        }
+        
+        // Handle specific tags first
+        const tag = element.tagName?.toLowerCase();
+        
+        // Handle formatting tags that might contain math
+        if (tag === 'strong' || tag === 'b') {
+            // Check if this contains KaTeX
+            if (containsKatex(element)) {
+                // Process children to extract math properly
+                for (const child of element.children) {
+                    if (child.classList && child.classList.contains('katex')) {
+                        const latex = extractLatexFromKatex(child);
+                        if (latex) {
+                            result.parts.push({
+                                type: 'bold_math',
+                                content: latex
+                            });
+                        }
+                    } else {
+                        // Process non-katex children normally
+                        extractContentRecursive(child, reasoningDropdown, result, listDepth);
+                    }
+                }
+                
+                // Also check for text nodes that aren't part of katex
+                for (const node of element.childNodes) {
+                    if (node.nodeType === Node.TEXT_NODE) {
+                        const text = node.textContent.trim();
+                        if (text) {
+                            result.parts.push({
+                                type: 'bold',
+                                content: text
+                            });
+                        }
+                    }
+                }
+                return result;
+            } else {
+                // No math, just bold text
+                result.parts.push({
+                    type: 'bold',
+                    content: element.textContent.trim()
+                });
+                return result;
+            }
+        }
+        
+        if (tag === 'em' || tag === 'i') {
+            result.parts.push({
+                type: 'italic',
+                content: element.textContent.trim()
+            });
+            return result;
+        }
+        
+        // Handle other specific tags
+        if (tag === 'br') {
+            result.parts.push({ type: 'break' });
+            return result;
+        }
+        
+        if (tag === 'p' || tag === 'div') {
+            // Add paragraph break before if needed
+            const lastPart = result.parts[result.parts.length - 1];
+            if (lastPart && lastPart.type !== 'paragraph') {
+                result.parts.push({ type: 'paragraph' });
+            }
+            
+            // Process children
+            for (const child of element.childNodes) {
+                if (child.nodeType === Node.TEXT_NODE) {
+                    const text = child.textContent.trim();
+                    if (text) {
+                        const lastPart = result.parts[result.parts.length - 1];
+                        if (lastPart && lastPart.type === 'text') {
+                            lastPart.content += ' ' + text;
+                        } else {
+                            result.parts.push({
+                                type: 'text',
+                                content: text
+                            });
+                        }
+                    }
+                } else if (child.nodeType === Node.ELEMENT_NODE) {
+                    extractContentRecursive(child, reasoningDropdown, result, listDepth);
+                }
+            }
+            
+            // Add paragraph break after
+            result.parts.push({ type: 'paragraph' });
+            return result;
+        }
+        
+        if (tag === 'ul' || tag === 'ol') {
+            const isOrdered = tag === 'ol';
+            const items = Array.from(element.children).filter(el => el.tagName.toLowerCase() === 'li');
+            
+            items.forEach((item, index) => {
+                result.parts.push({
+                    type: 'listitem',
+                    ordered: isOrdered,
+                    depth: listDepth,
+                    index: index + 1
+                });
+                
+                // Process the content of the list item
+                for (const child of item.childNodes) {
+                    if (child.nodeType === Node.TEXT_NODE) {
+                        const text = child.textContent.trim();
+                        if (text) {
+                            result.parts.push({
+                                type: 'text',
+                                content: text
+                            });
+                        }
+                    } else if (child.nodeType === Node.ELEMENT_NODE) {
+                        extractContentRecursive(child, reasoningDropdown, result, listDepth + 1);
+                    }
+                }
+                
+                result.parts.push({ type: 'break' });
+            });
+            return result;
+        }
+        
+        if (tag === 'code' && (!element.parentElement || element.parentElement.tagName !== 'PRE')) {
+            result.parts.push({
+                type: 'code',
+                content: element.textContent
+            });
+            return result;
+        }
+        
+        if (tag === 'pre') {
+            const codeEl = element.querySelector('code');
+            result.parts.push({
+                type: 'codeblock',
+                content: codeEl ? codeEl.textContent : element.textContent,
+                language: codeEl?.className?.match(/language-(\w+)/)?.[1] || ''
+            });
+            return result;
+        }
+        
+        if (tag && tag.match(/^h[1-6]$/)) {
+            result.parts.push({
+                type: 'heading',
+                level: parseInt(tag[1]),
+                content: element.textContent
+            });
+            return result;
+        }
+        
+        // Default: process child nodes
         for (const child of element.childNodes) {
             if (child.nodeType === Node.TEXT_NODE) {
-                const text = child.textContent;
-                if (text && text.trim()) {
-                    // Add text or append to last text part
+                const text = child.textContent.trim();
+                if (text) {
                     const lastPart = result.parts[result.parts.length - 1];
                     if (lastPart && lastPart.type === 'text') {
-                        lastPart.content += text;
+                        lastPart.content += ' ' + text;
                     } else {
                         result.parts.push({
                             type: 'text',
@@ -234,86 +403,15 @@ javascript:(function() {
                     }
                 }
             } else if (child.nodeType === Node.ELEMENT_NODE) {
-                // Handle specific tags
-                const tag = child.tagName.toLowerCase();
-                
-                if (tag === 'br') {
-                    result.parts.push({ type: 'break' });
-                } else if (tag === 'p' || tag === 'div') {
-                    // Add paragraph break before if needed
-                    const lastPart = result.parts[result.parts.length - 1];
-                    if (lastPart && lastPart.type !== 'paragraph') {
-                        result.parts.push({ type: 'paragraph' });
-                    }
-                    
-                    // Recursively process paragraph
-                    extractContentRecursive(child, reasoningDropdown, result, listDepth);
-                    
-                    // Add paragraph break after
-                    result.parts.push({ type: 'paragraph' });
-                } else if (tag === 'ul' || tag === 'ol') {
-                    // Process list
-                    const isOrdered = tag === 'ol';
-                    const items = Array.from(child.children).filter(el => el.tagName.toLowerCase() === 'li');
-                    
-                    items.forEach((item, index) => {
-                        // Add list item marker
-                        result.parts.push({
-                            type: 'listitem',
-                            ordered: isOrdered,
-                            depth: listDepth,
-                            index: index + 1
-                        });
-                        
-                        // Recursively process list item content
-                        extractContentRecursive(item, reasoningDropdown, result, listDepth + 1);
-                        
-                        // Add newline after list item
-                        result.parts.push({ type: 'break' });
-                    });
-                } else if (tag === 'li') {
-                    // If we encounter a standalone li (not processed by parent ul/ol), process its content
-                    extractContentRecursive(child, reasoningDropdown, result, listDepth);
-                } else if (tag === 'code' && child.parentElement.tagName !== 'PRE') {
-                    result.parts.push({
-                        type: 'code',
-                        content: child.textContent
-                    });
-                } else if (tag === 'pre') {
-                    const codeEl = child.querySelector('code');
-                    result.parts.push({
-                        type: 'codeblock',
-                        content: codeEl ? codeEl.textContent : child.textContent,
-                        language: codeEl?.className?.match(/language-(\w+)/)?.[1] || ''
-                    });
-                } else if (tag === 'strong' || tag === 'b') {
-                    result.parts.push({
-                        type: 'bold',
-                        content: child.textContent
-                    });
-                } else if (tag === 'em' || tag === 'i') {
-                    result.parts.push({
-                        type: 'italic',
-                        content: child.textContent
-                    });
-                } else if (tag.match(/^h[1-6]$/)) {
-                    result.parts.push({
-                        type: 'heading',
-                        level: parseInt(tag[1]),
-                        content: child.textContent
-                    });
-                } else {
-                    // Recursively process other elements
-                    extractContentRecursive(child, reasoningDropdown, result, listDepth);
-                }
+                extractContentRecursive(child, reasoningDropdown, result, listDepth);
             }
         }
         
         return result;
     }
-    
+
     /**
-     * Converts content parts to markdown
+     * Converts content parts to markdown - UPDATED VERSION
      */
     function partsToMarkdown(parts) {
         let markdown = '';
@@ -332,20 +430,24 @@ javascript:(function() {
                         markdown += `$${part.content}$`;
                     }
                     break;
+                case 'bold_math':
+                    // Special handling for bold math
+                    markdown += `**$${part.content}$**`;
+                    break;
                 case 'listitem':
-                // ensure we start on a new line
-                if (!markdown.endsWith('\n')) {
-                    markdown += '\n';
-                }
-
-                // Add proper indentation
-                const indent = '  '.repeat(part.depth);
-                if (part.ordered) {
-                    markdown += `${indent}${part.index}. `;
-                } else {
-                    markdown += `${indent}- `;
-                }
-                break;
+                    // ensure we start on a new line
+                    if (!markdown.endsWith('\n')) {
+                        markdown += '\n';
+                    }
+                    
+                    // Add proper indentation
+                    const indent = '  '.repeat(part.depth);
+                    if (part.ordered) {
+                        markdown += `${indent}${part.index}. `;
+                    } else {
+                        markdown += `${indent}- `;
+                    }
+                    break;
                 case 'paragraph':
                     // Add double newline, but avoid multiple consecutive breaks
                     if (!markdown.endsWith('\n\n')) {
