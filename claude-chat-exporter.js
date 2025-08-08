@@ -273,30 +273,30 @@ javascript:(function() {
                 }
                 return result;
             } else {
-                // No math, just bold text
+                // No math, just bold text - DON'T RETURN, continue processing
                 result.parts.push({
                     type: 'bold',
                     content: element.textContent.trim()
                 });
-                return result;
+                // REMOVED: return result;
             }
         }
         
-        if (tag === 'em' || tag === 'i') {
+        else if (tag === 'em' || tag === 'i') {
             result.parts.push({
                 type: 'italic',
                 content: element.textContent.trim()
             });
-            return result;
+            // REMOVED: return result;
         }
         
         // Handle other specific tags
-        if (tag === 'br') {
+        else if (tag === 'br') {
             result.parts.push({ type: 'break' });
             return result;
         }
         
-        if (tag === 'p' || tag === 'div') {
+        else if (tag === 'p' || tag === 'div') {
             // Add paragraph break before if needed
             const lastPart = result.parts[result.parts.length - 1];
             if (lastPart && lastPart.type !== 'paragraph') {
@@ -328,7 +328,7 @@ javascript:(function() {
             return result;
         }
         
-        if (tag === 'ul' || tag === 'ol') {
+        else if (tag === 'ul' || tag === 'ol') {
             const isOrdered = tag === 'ol';
             const items = Array.from(element.children).filter(el => el.tagName.toLowerCase() === 'li');
             
@@ -360,7 +360,7 @@ javascript:(function() {
             return result;
         }
         
-        if (tag === 'code' && (!element.parentElement || element.parentElement.tagName !== 'PRE')) {
+        else if (tag === 'code' && (!element.parentElement || element.parentElement.tagName !== 'PRE')) {
             result.parts.push({
                 type: 'code',
                 content: element.textContent
@@ -368,7 +368,7 @@ javascript:(function() {
             return result;
         }
         
-        if (tag === 'pre') {
+        else if (tag === 'pre') {
             const codeEl = element.querySelector('code');
             result.parts.push({
                 type: 'codeblock',
@@ -378,7 +378,7 @@ javascript:(function() {
             return result;
         }
         
-        if (tag && tag.match(/^h[1-6]$/)) {
+        else if (tag && tag.match(/^h[1-6]$/)) {
             result.parts.push({
                 type: 'heading',
                 level: parseInt(tag[1]),
@@ -387,23 +387,25 @@ javascript:(function() {
             return result;
         }
         
-        // Default: process child nodes
-        for (const child of element.childNodes) {
-            if (child.nodeType === Node.TEXT_NODE) {
-                const text = child.textContent.trim();
-                if (text) {
-                    const lastPart = result.parts[result.parts.length - 1];
-                    if (lastPart && lastPart.type === 'text') {
-                        lastPart.content += ' ' + text;
-                    } else {
-                        result.parts.push({
-                            type: 'text',
-                            content: text
-                        });
+        // Default: process child nodes (only if not already handled)
+        else {
+            for (const child of element.childNodes) {
+                if (child.nodeType === Node.TEXT_NODE) {
+                    const text = child.textContent.trim();
+                    if (text) {
+                        const lastPart = result.parts[result.parts.length - 1];
+                        if (lastPart && lastPart.type === 'text') {
+                            lastPart.content += ' ' + text;
+                        } else {
+                            result.parts.push({
+                                type: 'text',
+                                content: text
+                            });
+                        }
                     }
+                } else if (child.nodeType === Node.ELEMENT_NODE) {
+                    extractContentRecursive(child, reasoningDropdown, result, listDepth);
                 }
-            } else if (child.nodeType === Node.ELEMENT_NODE) {
-                extractContentRecursive(child, reasoningDropdown, result, listDepth);
             }
         }
         
@@ -411,13 +413,26 @@ javascript:(function() {
     }
 
     /**
-     * Converts content parts to markdown - UPDATED VERSION
+     * Converts content parts to markdown - IMPROVED VERSION
      */
     function partsToMarkdown(parts) {
         let markdown = '';
         
         for (let i = 0; i < parts.length; i++) {
             const part = parts[i];
+            const prevPart = i > 0 ? parts[i - 1] : null;
+            const nextPart = i < parts.length - 1 ? parts[i + 1] : null;
+            
+            // Check if we need a space before this part
+            const needSpaceBefore = prevPart && 
+                                   (prevPart.type === 'text' || prevPart.type === 'bold' || prevPart.type === 'italic' || prevPart.type === 'code') &&
+                                   (part.type === 'bold' || part.type === 'italic' || part.type === 'code') &&
+                                   !markdown.endsWith(' ') && 
+                                   !markdown.endsWith('\n');
+            
+            if (needSpaceBefore) {
+                markdown += ' ';
+            }
             
             switch (part.type) {
                 case 'text':
@@ -474,6 +489,18 @@ javascript:(function() {
                 case 'heading':
                     markdown += `\n${'#'.repeat(part.level)} ${part.content}\n\n`;
                     break;
+            }
+            
+            // Check if we need a space after this part
+            const needSpaceAfter = nextPart && 
+                                  (part.type === 'bold' || part.type === 'italic' || part.type === 'code') &&
+                                  (nextPart.type === 'text') &&
+                                  !nextPart.content.startsWith(' ') &&
+                                  !nextPart.content.startsWith(',') &&
+                                  !nextPart.content.startsWith('.');
+            
+            if (needSpaceAfter) {
+                markdown += ' ';
             }
         }
         
